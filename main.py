@@ -1,58 +1,78 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from pymongo import MongoClient
 import requests
+from datetime import datetime
 
+# ------------------ APP ------------------
 app = FastAPI()
 
+# ------------------ CORS ------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],   # for development
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
+# ------------------ MONGODB ------------------
+# Make sure MongoDB service is running
+client = MongoClient("mongodb://localhost:27017")
+
+db = client["ollama_chatbot"]      # Database name
+collection = db["chats"]           # Collection name
+
+# ------------------ OLLAMA ------------------
 OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL_NAME = "life4living/ChatGPT"
 
-# ---------- MODEL DECISION ----------
-def decide_model(message: str):
-    keywords = [
-        "code", "program", "python", "java", "react", "html",
-        "css", "javascript", "algorithm", "function", "error"
-    ]
-    for word in keywords:
-        if word in message.lower():
-            return "deepseek-coder:latest"
-    return "life4living/ChatGPT"
+# ------------------ REQUEST MODEL ------------------
+class ChatRequest(BaseModel):
+    message: str
 
-# ---------- PROMPTS ----------
-CODE_PROMPT = (
-    "You are a professional programming assistant.\n"
-    "Rules:\n"
-    "- Give the shortest correct code.\n"
-    "- No explanation.\n"
-    "- Clean and readable code only.\n"
-)
-
-CHAT_PROMPT = (
-    "You are a helpful assistant.\n"
-    "Rules:\n"
-    "- Answer briefly.\n"
-    "- Be simple and direct.\n"
-)
-
-# ---------- API ----------
+# ------------------ CHAT API ------------------
 @app.post("/chat")
-def chat(req: dict):
-    user_msg = req["message"]
-    model = decide_model(user_msg)
+def chat(req: ChatRequest):
+    try:
+        # Call Ollama
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": MODEL_NAME,
+                "prompt": req.message,
+                "stream": False
+            },
+            timeout=120
+        )
 
-    prompt = CODE_PROMPT if model.startswith("deepseek") else CHAT_PROMPT
+        bot_reply = response.json().get("response", "")
 
-    payload = {
-        "model": model,
-        "prompt": f"{prompt}\nUser: {user_msg}",
-        "stream": False
-    }
+        # Save chat to MongoDB
+        chat_doc = {
+            "user_message": req.message,
+            "bot_reply": bot_reply,
+            "created_at": datetime.utcnow()
+        }
 
-    response = requests.post(OLLAMA_URL, json=payload)
-    return {"reply": response.json()["response"]}
+        collection.insert_one(chat_doc)
+
+        return {"reply": bot_reply}
+
+    except Exception as e:
+        return {"error": str(e)}
+
+# ------------------ GET CHAT HISTORY ------------------
+@app.get("/chats")
+def get_chats():
+    chats = []
+
+    for doc in collection.find().sort("created_at", -1):
+        chats.append({
+            "id": str(doc["_id"]),
+            "user_message": doc["user_message"],
+            "bot_reply": doc["bot_reply"],
+            "created_at": doc["created_at"]
+        })
+
+    return chats
