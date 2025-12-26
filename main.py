@@ -11,53 +11,62 @@ app = FastAPI()
 # ------------------ CORS ------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # for development
+    allow_origins=["*"],  # React frontend
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ------------------ MONGODB ------------------
-# Make sure MongoDB service is running
 client = MongoClient("mongodb://localhost:27017")
-
-db = client["ollama_chatbot"]      # Database name
-collection = db["chats"]           # Collection name
+db = client["ollama_chatbot"]
+collection = db["chats"]
 
 # ------------------ OLLAMA ------------------
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "life4living/ChatGPT"
+
+SUPPORTED_MODELS = {
+    "chat": "life4living/ChatGPT",
+    "code": "deepseek-coder"
+}
 
 # ------------------ REQUEST MODEL ------------------
 class ChatRequest(BaseModel):
     message: str
+    model_type: str = "chat"  # default model
 
 # ------------------ CHAT API ------------------
 @app.post("/chat")
 def chat(req: ChatRequest):
     try:
-        # Call Ollama
+        model_name = SUPPORTED_MODELS.get(req.model_type, "life4living/ChatGPT")
+
         response = requests.post(
             OLLAMA_URL,
             json={
-                "model": MODEL_NAME,
+                "model": model_name,
                 "prompt": req.message,
                 "stream": False
             },
             timeout=120
         )
 
+        response.raise_for_status()
+
         bot_reply = response.json().get("response", "")
 
-        # Save chat to MongoDB
-        chat_doc = {
+        # Save chat
+        collection.insert_one({
+            "model": model_name,
             "user_message": req.message,
             "bot_reply": bot_reply,
             "created_at": datetime.utcnow()
+        })
+
+        return {
+            "reply": bot_reply,
+            "model_used": model_name
         }
-
-        collection.insert_one(chat_doc)
-
-        return {"reply": bot_reply}
 
     except Exception as e:
         return {"error": str(e)}
@@ -66,13 +75,17 @@ def chat(req: ChatRequest):
 @app.get("/chats")
 def get_chats():
     chats = []
-
     for doc in collection.find().sort("created_at", -1):
         chats.append({
             "id": str(doc["_id"]),
+            "model": doc.get("model"),
             "user_message": doc["user_message"],
             "bot_reply": doc["bot_reply"],
             "created_at": doc["created_at"]
         })
-
     return chats
+
+# ------------------ HEALTH CHECK ------------------
+@app.get("/")
+def root():
+    return {"status": "Backend is running 🚀"}
