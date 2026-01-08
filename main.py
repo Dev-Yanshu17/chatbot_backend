@@ -11,7 +11,7 @@ app = FastAPI()
 # ------------------ CORS ------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # React frontend
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -25,21 +25,36 @@ collection = db["chats"]
 # ------------------ OLLAMA ------------------
 OLLAMA_URL = "http://localhost:11434/api/generate"
 
-SUPPORTED_MODELS = {
-    "chat": "life4living/ChatGPT",
-    "code": "deepseek-coder"
-}
+CHAT_MODEL = "life4living/ChatGPT"
+CODE_MODEL = "deepseek-coder"
 
 # ------------------ REQUEST MODEL ------------------
 class ChatRequest(BaseModel):
     message: str
-    model_type: str = "chat"  # default model
+
+# ------------------ HELPER: DETECT CODE QUESTION ------------------
+def is_code_question(text: str) -> bool:
+    code_keywords = [
+        "code", "program", "function", "bug", "error", "exception",
+        "python", "java", "c++", "c program", "javascript", "react",
+        "node", "api", "sql", "html", "css", "algorithm", "loop",
+        "array", "string", "class", "object", "compile", "debug"
+    ]
+
+    text = text.lower()
+    return any(keyword in text for keyword in code_keywords)
 
 # ------------------ CHAT API ------------------
 @app.post("/chat")
 def chat(req: ChatRequest):
     try:
-        model_name = SUPPORTED_MODELS.get(req.model_type, "life4living/ChatGPT")
+        # ✅ AUTO MODEL SELECTION
+        if is_code_question(req.message):
+            model_name = CODE_MODEL
+            model_type = "code"
+        else:
+            model_name = CHAT_MODEL
+            model_type = "chat"
 
         response = requests.post(
             OLLAMA_URL,
@@ -48,16 +63,16 @@ def chat(req: ChatRequest):
                 "prompt": req.message,
                 "stream": False
             },
-            timeout=120
+            timeout=180
         )
 
         response.raise_for_status()
-
         bot_reply = response.json().get("response", "")
 
         # Save chat
         collection.insert_one({
-            "model": model_name,
+            "model_type": model_type,
+            "model_used": model_name,
             "user_message": req.message,
             "bot_reply": bot_reply,
             "created_at": datetime.utcnow()
@@ -65,7 +80,8 @@ def chat(req: ChatRequest):
 
         return {
             "reply": bot_reply,
-            "model_used": model_name
+            "model_used": model_name,
+            "model_type": model_type
         }
 
     except Exception as e:
@@ -78,7 +94,8 @@ def get_chats():
     for doc in collection.find().sort("created_at", -1):
         chats.append({
             "id": str(doc["_id"]),
-            "model": doc.get("model"),
+            "model_used": doc["model_used"],
+            "model_type": doc["model_type"],
             "user_message": doc["user_message"],
             "bot_reply": doc["bot_reply"],
             "created_at": doc["created_at"]
