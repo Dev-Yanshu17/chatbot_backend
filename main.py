@@ -106,3 +106,4 @@ def get_chats():
 @app.get("/")
 def root():
     return {"status": "Backend is running 🚀"}
+    
