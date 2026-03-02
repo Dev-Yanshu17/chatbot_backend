@@ -32,11 +32,11 @@ CODE_MODEL = "deepseek-coder"
 class ChatRequest(BaseModel):
     message: str
 
-# ------------------ HELPER: DETECT CODE QUESTION ------------------
+# ------------------ DETECT CODE QUESTION ------------------
 def is_code_question(text: str) -> bool:
     code_keywords = [
         "code", "program", "function", "bug", "error", "exception",
-        "python", "java", "c++", "c program", "javascript", "react",
+        "python", "java", "c++", "javascript", "react",
         "node", "api", "sql", "html", "css", "algorithm", "loop",
         "array", "string", "class", "object", "compile", "debug"
     ]
@@ -48,28 +48,57 @@ def is_code_question(text: str) -> bool:
 @app.post("/chat")
 def chat(req: ChatRequest):
     try:
-        # ✅ AUTO MODEL SELECTION
+        # 🔥 AUTO MODEL SELECTION
         if is_code_question(req.message):
             model_name = CODE_MODEL
             model_type = "code"
+
+            # 🔥 Short coding response prompt
+            final_prompt = f"""
+You are a professional coding assistant.
+
+Rules:
+- Give very short explanation (max 2 lines)
+- Provide only necessary code
+- No long paragraphs
+- No extra examples
+- Keep response concise
+
+User Question:
+{req.message}
+"""
         else:
             model_name = CHAT_MODEL
             model_type = "chat"
 
+            # 🔥 Short general response prompt
+            final_prompt = f"""
+Give a short and clear answer.
+Keep response concise.
+Do not give long explanation.
+
+User Question:
+{req.message}
+"""
+
         response = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": model_name,
-                "prompt": req.message,
-                "stream": False
-            },
-            timeout=180
-        )
+    OLLAMA_URL,
+    json={
+        "model": model_name,
+        "prompt": final_prompt,
+        "stream": False,
+        "options": {
+            "temperature": 0.2,
+            "top_p": 0.8
+        }
+    },
+    timeout=180
+)
 
         response.raise_for_status()
         bot_reply = response.json().get("response", "")
 
-        # Save chat
+        # ---------------- SAVE TO MONGODB ----------------
         collection.insert_one({
             "model_type": model_type,
             "model_used": model_name,
@@ -106,4 +135,3 @@ def get_chats():
 @app.get("/")
 def root():
     return {"status": "Backend is running 🚀"}
-    
