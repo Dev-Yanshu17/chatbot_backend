@@ -5,6 +5,8 @@ from pymongo import MongoClient
 import requests
 from datetime import datetime
 
+import uuid
+
 # ------------------ APP ------------------
 app = FastAPI()
 
@@ -29,8 +31,13 @@ CHAT_MODEL = "life4living/ChatGPT"
 CODE_MODEL = "deepseek-coder"
 
 # ------------------ REQUEST MODEL ------------------
+# class ChatRequest(BaseModel):
+#     message: str
+
 class ChatRequest(BaseModel):
     message: str
+    session_id: str | None = None
+
 
 # ------------------ DETECT CODE QUESTION ------------------
 def is_code_question(text: str) -> bool:
@@ -47,6 +54,47 @@ def is_code_question(text: str) -> bool:
 # ------------------ CHAT API ------------------
 @app.post("/chat")
 def chat(req: ChatRequest):
+    try:
+        session_id = req.session_id or str(uuid.uuid4())
+
+        if is_code_question(req.message):
+            model_name = CODE_MODEL
+            model_type = "code"
+            final_prompt = f"Give short coding answer.\n{req.message}"
+        else:
+            model_name = CHAT_MODEL
+            model_type = "chat"
+            final_prompt = f"Give short answer.\n{req.message}"
+
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": model_name,
+                "prompt": final_prompt,
+                "stream": False
+            },
+            timeout=180
+        )
+
+        bot_reply = response.json().get("response", "")
+
+        # SAVE WITH SESSION ID
+        collection.insert_one({
+            "session_id": session_id,
+            "model_type": model_type,
+            "model_used": model_name,
+            "user_message": req.message,
+            "bot_reply": bot_reply,
+            "created_at": datetime.utcnow()
+        })
+
+        return {
+            "reply": bot_reply,
+            "session_id": session_id
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
     try:
         # 🔥 AUTO MODEL SELECTION
         if is_code_question(req.message):
@@ -135,3 +183,29 @@ def get_chats():
 @app.get("/")
 def root():
     return {"status": "Backend is running 🚀"}
+
+    
+#----------------load chat history by session id------------------
+    
+    
+@app.get("/chats/{session_id}")
+def get_chat_by_session(session_id: str):
+    chats = []
+
+    for doc in collection.find({"session_id": session_id}).sort("created_at", 1):
+        chats.append({
+            "role": "user",
+            "text": doc["user_message"]
+        })
+        chats.append({
+            "role": "bot",
+            "text": doc["bot_reply"]
+        })
+
+    return chats
+
+
+@app.get("/sessions")
+def get_sessions():
+    sessions = collection.distinct("session_id")
+    return sessions
