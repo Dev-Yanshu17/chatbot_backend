@@ -4,8 +4,17 @@ from pydantic import BaseModel
 from pymongo import MongoClient
 import requests
 from datetime import datetime
-
 import uuid
+
+
+from fastapi.responses import FileResponse
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import pagesizes
+from reportlab.lib.units import inch
+import os
+
 
 # ------------------ APP ------------------
 app = FastAPI()
@@ -209,3 +218,41 @@ def get_chat_by_session(session_id: str):
 def get_sessions():
     sessions = collection.distinct("session_id")
     return sessions
+
+
+@app.get("/export/{session_id}")
+def export_pdf(session_id: str):
+    file_path = f"chat_{session_id}.pdf"
+
+    doc = SimpleDocTemplate(
+        file_path,
+        pagesize=pagesizes.A4
+    )
+
+    elements = []
+    styles = getSampleStyleSheet()
+
+    # Table Header
+    data = [["User Prompt", "Bot Reply"]]
+
+    # Fetch session chats
+    chats = collection.find({"session_id": session_id}).sort("created_at", 1)
+
+    for doc_chat in chats:
+        data.append([
+            Paragraph(doc_chat["user_message"], styles["Normal"]),
+            Paragraph(doc_chat["bot_reply"], styles["Normal"])
+        ])
+
+    table = Table(data, colWidths=[3 * inch, 3 * inch])
+
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+    ]))
+
+    elements.append(table)
+    doc.build(elements)
+
+    return FileResponse(file_path, media_type="application/pdf", filename="chat_export.pdf")
