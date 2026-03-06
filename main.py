@@ -52,8 +52,8 @@ class ChatRequest(BaseModel):
 def is_code_question(text: str) -> bool:
     code_keywords = [
         "code", "program", "function", "bug", "error", "exception",
-        "python", "java", "c++", "javascript", "react",
-        "node", "api", "sql", "html", "css", "algorithm", "loop",
+         "java", "c++", "javascript", "react","python","loop",
+        "node", "api", "sql", "html", "css", "algorithm", 
         "array", "string", "class", "object", "compile", "debug"
     ]
 
@@ -219,9 +219,48 @@ def get_sessions():
     sessions = collection.distinct("session_id")
     return sessions
 
-
 @app.get("/export/{session_id}")
 def export_pdf(session_id: str):
+
+    file_path = f"chat_{session_id}.pdf"
+
+    styles = getSampleStyleSheet()
+
+    data = [["User Prompt", "Bot Reply"]]
+
+    chats = collection.find({"session_id": session_id}).sort("created_at", 1)
+
+    for chat in chats:
+
+        user_msg = chat.get("user_message", "")
+        bot_msg = chat.get("bot_reply", "")
+
+        data.append([
+            Paragraph(str(user_msg), styles["Normal"]),
+            Paragraph(str(bot_msg), styles["Normal"])
+        ])
+
+    if len(data) == 1:
+        data.append(["No Data", "No Data"])
+
+    table = Table(data, colWidths=[3 * inch, 3 * inch])
+
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.lightblue),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+    ]))
+
+    elements = []
+    elements.append(Paragraph("AI Chatbot Conversation History", styles["Title"]))
+    elements.append(Spacer(1,20))
+    elements.append(table)
+
+    doc = SimpleDocTemplate(file_path, pagesize=pagesizes.A4)
+    doc.build(elements)
+
+    return FileResponse(file_path, media_type="application/pdf", filename="chat_history.pdf")
+
     file_path = f"chat_{session_id}.pdf"
 
     doc = SimpleDocTemplate(
@@ -235,24 +274,31 @@ def export_pdf(session_id: str):
     # Table Header
     data = [["User Prompt", "Bot Reply"]]
 
-    # Fetch session chats
+    # Fetch chats of session
     chats = collection.find({"session_id": session_id}).sort("created_at", 1)
 
-    for doc_chat in chats:
-        data.append([
-            Paragraph(doc_chat["user_message"], styles["Normal"]),
-            Paragraph(doc_chat["bot_reply"], styles["Normal"])
-        ])
+    for chat in chats:
+        user_msg = Paragraph(chat["user_message"], styles["Normal"])
+        bot_msg = Paragraph(chat["bot_reply"], styles["Normal"])
+
+        data.append([user_msg, bot_msg])
 
     table = Table(data, colWidths=[3 * inch, 3 * inch])
 
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
     ]))
 
+    elements.append(Spacer(1, 20))
     elements.append(table)
+
     doc.build(elements)
 
-    return FileResponse(file_path, media_type="application/pdf", filename="chat_export.pdf")
+    return FileResponse(
+        file_path,
+        media_type="application/pdf",
+        filename="chat_history.pdf"
+    )
